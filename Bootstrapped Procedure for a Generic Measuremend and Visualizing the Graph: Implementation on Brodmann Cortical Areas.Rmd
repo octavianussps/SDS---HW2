@@ -1,0 +1,173 @@
+---
+title: "Bootstrapped Procedure for a Generic Measuremend and Visualizing the Graph: Implementation on Brodmann Cortical Areas"
+author: "Octavianus Surya Putra Sinaga"
+date: "12/20/2019"
+output: html_document
+---
+#### Firstly, We need to import all the libraries needed in this project
+```{r}
+library(igraph) 
+library(ggraph)
+library(SIN)
+
+```
+
+
+#### Now, we load the data we have to work with in file hw2_data.RData, Then take a look at the structure of the data. 
+```{r}
+
+load('hw2_data.rdata') #loading brain data
+print(head(mts[,1:5]))
+n_samples <-nrow(mts) # 240 rows >The rows are the observation time
+n_features <-ncol(mts) # 81 cols
+
+```
+#### From the data above, we make   a true correlation matrix R of plug in estimates that we will use later for bootstrap, then take a look of the result
+```{r}
+## Association Measure: True Corrolation matrix R 
+R <-cor(mts) 
+#Take a look of R
+print(head(R[,1:10]))
+```
+
+#### Now we need to build a simultaneous bootstrapped Confidene Interval for a generic association measure $\rho$
+##### First, we need to take a bootstrap sample of true corrolation R, then define the bootstrapped replicate of a simultaneous statistic $\Delta_{b}$. For this, we are implementing nonparametric bootsrap.
+```{r}
+#Initiate the bootstrap
+B = 1000
+DeltaB.nboot = rep(NA, B)
+set.seed(123)
+for (b in 1:B){
+  # nonparametric sampling
+  idx<-sample( 1:n_samples,replace = TRUE )
+  x_boot=mts[idx,]  
+  R_star <- cor(x_boot) # bootstrapped R
+  DeltaB.nboot[b] <- sqrt( n_samples ) * (max (abs(R_star-R) ))
+}
+# Show the histogram
+hist(DeltaB.nboot, probability = T, breaks = 20, col = "purple", border = "black", main = "Bootstrapped DeltaB", add =)
+```
+
+##### Now, we can calculate the associated bootstrapped ECDF , $\hat{F}_{n}(t)$
+```{r}
+# Bootstrapped ECDF:
+f_hat <-ecdf( (1/B)*(DeltaB.nboot) )
+f_hat
+```
+##### For large n and B,   $\hat{F}_{n}(t)$ should be a good approximation to $F_{n}(t)$.
+
+##### Let's take a look of the graph  $\hat{F}_{n}(t)$
+```{r}
+# Graph F_hat
+par(mfrow = c(1,2))
+plot(f_hat, main = "F_hat", col = "orchid", lwd = 3)
+```
+##### Finally, we can build simultaneous confidence set by using previous variables we have.Consider the sample quantile at level  $1 -\alpha$ of the bootsrapped distribution $\hat{F}_{n}(t)$ , we got the  $$t_{\alpha}=hat{F}_{n}^-1(1-\alpha)$$
+#for the CI, we pick level $\alpha$ at 0.1, so we have 90 % of confidence and show the confidence interval
+```{r}
+# Pick the t_alpha value for aplha = 0.1
+t_alpha <- quantile(DeltaB.nboot, 1 - 0.1)
+# Calculate confidence set for all correlation matrix R
+lower.bound = R - (t_alpha/sqrt(n_samples))
+upper.bound = R + (t_alpha/sqrt(n_samples))
+
+# Show the confidence interval for one value of set R
+round(
+  c(lower = R[10] - (t_alpha/sqrt(n_samples)),
+    upper = R[10] + (t_alpha/sqrt(n_samples))), 3
+)
+```
+
+#### Now, We are going to represent the estimated graph from the true correlation matix we have as the representative variable for connectivity of Brodman cortical areas we are about to observe. Then we define the edges from the graph, filter them (i.e : cor(ulna,ulna) = 1). For this particular moment, we set the $\epsilon$ into 0. So, we draw the edges long as the  $\rho$ is not 0.
+```{r}
+# Build a grah for correlation matrix we have 
+graph.R <- graph_from_adjacency_matrix(R, mode='undirected',weighted = "Correlation" ,add.colnames = NULL, add.rownames = NA)
+
+#List of edges from of the graph
+edges_ <- as_data_frame(graph.R, 'Edges')
+#Take out the same variable (correlation value = 1)
+edges_ <- edges_[abs(edges_$Correlation) !=1, ]
+# Set the epsilon > 0
+edges.1 <- edges_[abs(edges_$Correlation) > 0, ]
+graph.R1 <- graph_from_data_frame(edges.1, FALSE)
+# Make 4 group of correlation value from edge list
+Correlation1 = cut_number((edges.1$ "Correlation"), 4)
+# Set the color 
+color = c("#F0E442", "#0072B2", "#D55E00", "#CC79A7") 
+names(color) = levels(Correlation1)
+
+# Plot the graph
+ggraph(graph.R1, layout = 'linear', circular = TRUE) + 
+  geom_edge_arc(aes(color=Correlation1))+ 
+  geom_node_point() +
+  geom_node_text(aes(label = name), repel=TRUE)
+```
+### Now, we pick different $\epsilon$ to compare the result from before
+```{r}
+# Set the epsilon = 0.5
+edge.2<- edges_[abs(edges_$Correlation) > 0.5, ] 
+# Set the graph
+graph.R2 <- graph_from_data_frame(edge.2, FALSE)
+
+# Make 4 group of correlation value from
+Correlation2 = cut_number((edge.2$ "Correlation"), 4)
+# Set the color 
+color = c("#F0E442", "#0072B2", "#D55E00", "#CC79A7") 
+names(color) = levels(Correlation2)
+
+# Plot the graph
+ggraph(graph.R2, layout = 'linear', circular = TRUE) + 
+  geom_edge_arc(aes(color=Correlation2))+ 
+  geom_node_point() +
+  geom_node_text(aes(label = name), repel=TRUE)
+```
+#### By comparing the both images, we can se by inception that the area of 47L(frontal cortex - left side) obviously loose so many connectivity as we increasing the $\epsilon$ by 0.5. In the biolegical sense, Frontal cortex takes part in most human cognitive skills. Meaning that this particular region should connected to many functional nerves. 
+#### Based on what we have done by changing the $\epsilon$ value into quite extreme value, yielding the misintrepretation of model we need to observe (in this case, brain nerve connectivity). Therefore, picking the most suitable cut-off rate is important to draw a more reliable result.
+### Now, we are going to repeat the analysis using linear partial correlation as implemented in SIN package. First, Build a p-value matrix for our dataset and see the result
+
+```{r}
+# Build a matrix of simultaneous p-value graph
+out.SIN=sinUG(R,n_samples)
+# plot the result
+plotUGpvalues(out.SIN)
+```
+#### Next, We build a connectivity matrix based on alpha that we pick. This time we choose $\alpha$ at 0.05 (95% confidence). Then, show the result
+```{r}
+par(mfrow = c(1,2))
+#Set error level
+alpha1 = 0.05
+# build correlation matrix
+edge.SIN1 = getgraph(out.SIN, alpha1)
+print(head(edge.SIN1[,1:10]))
+```
+#### Now, we are going to build the graph like we did on previous excersi, this time using the SIN package
+
+```{r}
+# Define the graph
+graph.SIN1 = graph.adjacency(edge.SIN1, mode = "undirected")
+ggraph(graph.SIN1, layout = 'linear', circular = TRUE) + 
+  geom_edge_arc(aes(color="red"))+ 
+  geom_node_point() +
+  geom_node_text(aes(label = name), repel=TRUE)
+```
+#### Try to implement the analysis with different $\alpha$. This time we pick 0.01
+```{r}
+par(mfrow = c(1,2))
+#Set error level
+alpha2 = 0.01
+# build correlation matrix
+edge.SIN2 = getgraph(out.SIN, alpha2)
+print(head(edge.SIN2[,1:10]))
+```
+#### Draw the connectivity graph for $\alpha$ = 0.01
+
+```{r}
+# Define the graph
+graph.SIN2 = graph.adjacency(edge.SIN2, mode = "undirected")
+ggraph(graph.SIN2, layout = 'linear', circular = TRUE) + 
+  geom_edge_arc(aes(color="red"))+ 
+  geom_node_point() +
+  geom_node_text(aes(label = name), repel=TRUE)
+```
+#### We can see as we decrease the $\alpha$ , we loose connectivity on our brain connectivity model. 
+#### Compared with using the previous method, in general we loose connectivity more using this analysis method. It is because the function getgraph from sin is put the same treshold on its own and at final graph its only 0 or 1 value. Compare to what we did on previous analysis, we put all value and build them as 4 categories of correlation, then we draw the connectivity based on the value we set up.
